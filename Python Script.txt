@@ -1,0 +1,1103 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Mar 26 17:49:40 2024
+
+"""
+
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import math
+import pandas as pd
+
+# Define parameters
+
+simulation_runs = 200
+
+# Mathematical Parameters
+S0 = 100 # initial stock price
+mu = 0 # drift
+sigma = 0.2 # volatility
+T = 1 # time to maturity
+n = 360*24*1 # number of time steps. Each time step is 1 hour
+dt = T/n # time step
+psi = 0.8 # feedback factor 
+zita = 0.2 
+phi = 0.1 
+r = 0 # risk-free rate
+beta = 0.28 # Implied volatility parameter
+sgamma = 0.1 # Implied volatility parameter
+w0 = 1
+
+# function definitions
+
+# dWt used in pricing formula, and movement of delta from Q8
+def gen_random_walk(n_steps, start=0):
+    # Generate random walk
+    random_walk = np.random.normal(size=n_steps, scale=math.sqrt(dt))
+    return random_walk
+
+# Mathematical formulas
+
+def return_d1(S, k, vol, d, r, tom):
+    try:
+        if tom == 0:
+            d1 = np.inf
+        else:
+            d1 = (math.log(S / k) + tom * (r - d + (vol ** 2) / 2)) / (vol * math.sqrt(tom))
+    except ValueError as e:
+        # Print the error message
+        print(e)
+        # Print all the input parameters
+        print("S = {}, k = {}, vol = {}, d = {}, r = {}, tom = {}".format(S, k, vol, d, r, tom))
+        # Exit the program
+        import sys
+        sys.exit(1)
+    except ZeroDivisionError as e:
+        # Print the error message
+        print(e)
+        # Print all the input parameters
+        print("S = {}, k = {}, vol = {}, d = {}, r = {}, tom = {}".format(S, k, vol, d, r, tom))
+        # Exit the program
+        import sys
+        sys.exit(1)
+    except Exception as e:
+        # Print the error message
+        print(e)
+        # Print all the input parameters
+        print("S = {}, k = {}, vol = {}, d = {}, r = {}, tom = {}".format(S, k, vol, d, r, tom))
+        # Exit the program
+        import sys
+        sys.exit(1)
+    return d1
+
+
+# Formula to reset K1 and K2 every quarter - MSF rebalance every quarter
+def returnK1(S_start_of_quarter, x):
+    k1 = S_start_of_quarter - x
+    return k1
+
+def returnK2(S_start_of_quarter, x):
+    k2 = S_start_of_quarter + x
+    return k2
+
+# Next section is Black Scholes greeks used. The handling codes relating to if the denominator = 0,treat the result as + infinity
+def BSdelta(pc, S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    if pc == 1:
+        BSdelta = math.exp(-d * tom) * norm.cdf(d1)
+    else:
+        BSdelta = math.exp(-d * tom) * (norm.cdf(d1) - 1)
+    return BSdelta
+
+def BSgamma(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    try:
+        BSgamma = math.exp(-d * tom) * math.exp((-d1 ** 2) / 2) / (math.sqrt(2 * math.pi) * S * vol * math.sqrt(tom))
+    except ZeroDivisionError as e:
+        BSgamma = 0
+    return BSgamma
+
+def BScharm(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    try:
+        BScharm = -(1/(math.sqrt(2*math.pi)))*math.exp(-d1**2/2)*(2*r*math.sqrt(tom)-vol*d2)/(2*vol*tom)
+    except ZeroDivisionError as e:
+        BScharm = 0
+    return BScharm
+
+def BSspeed(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    gamma = norm.pdf(d1) / (S * vol * math.sqrt(tom))
+    try:
+        BSspeed = -gamma / S * (d1 / (vol * math.sqrt(tom)) + 1)*math.exp(-r * tom)
+    except ZeroDivisionError as e:
+        BSspeed = 0
+    return BSspeed
+
+def BSvega(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    try:
+        BSvega = math.exp(-d *tom)*S*np.sqrt(tom)*math.exp((-d1**2)/2)/(np.sqrt(2*np.pi))
+    except ZeroDivisionError as e:
+        BSvega = 0
+    return BSvega
+
+def BSvanna(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    try:
+        BSvanna = -(d1-vol*np.sqrt(tom))  * math.exp((-d1 ** 2) / 2) / (vol*np.sqrt(2 * np.pi))
+    except ZeroDivisionError as e:
+        BSvanna = 0
+    return BSvanna
+
+def BSzomma(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    try:
+        BSzomma = (BSgamma(S, k, vol, d, r, tom)/ vol )*(1-d1*d2)
+    except ZeroDivisionError as e:
+        BSzomma = 0
+    return BSzomma
+
+def BSveta(S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    try:
+        BSveta = S * norm.pdf (d1) * np.sqrt(tom)
+    except ZeroDivisionError as e:
+        BSveta = 0
+    return BSveta
+
+# D implied vol D stock price, implied vol per formula given in Q9. 
+# The delta for option taken out by MSF = Delta BS + Gamma BS * D implied vol D St (defferciating real option price with embeded implied vol)
+def DimvDS(tom, k, S):
+    val = -beta * math.exp(sgamma*tom)* zita / ((k + S)**(zita + 1))
+    return val
+
+def DimvDS2(tom,k,S):
+    val = ((-beta * math.exp(sgamma*tom)* zita)*(1+zita)) / ((k + S)**(zita + 2))
+    return val
+
+def DimvDS3(tom,k,S):
+    val = ((-beta * math.exp(sgamma*tom)* zita)*(1+zita)*(2+zita)) / ((k + S)**(zita + 3))
+    return val
+
+def DimvDSDt(tom, k, S):
+    val = -beta*sgamma * math.exp(sgamma*tom)* zita / ((k + S)**(zita + 1))
+    return val
+
+
+def Realgamma (S, k, vol, d, r, tom):
+    Realgamma = BSgamma(S, k, vol, d, r, tom) + BSvanna(S, k, vol, d, r, tom) * DimvDS2(tom,k,S)+ BSvega(S, k, vol, d, r, tom)*DimvDS2(tom,k,S)
+    return Realgamma
+
+def Realcharm (S, k, vol, d, r, tom):
+    Realcharm = BScharm(S, k, vol, d, r, tom) + BSveta(S, k, vol, d, r, tom)*DimvDS(tom, k, S) + BSvega(S, k, vol, d, r, tom)*DimvDSDt(tom, k, S)
+    return Realcharm
+
+def Realspeed(S, k, vol, d, r, tom):
+    Realspeed = BSspeed(S, k, vol, d, r, tom)+ BSzomma(S, k, vol, d, r, tom) *DimvDS(tom, k, S)+ 2* BSvanna(S, k, vol, d, r, tom)*DimvDS2(tom,k,S) + BSvega(S, k, vol, d, r, tom) * DimvDS3(tom,k,S)
+    return Realspeed
+
+def ImVol(S,tom,k):
+    ImVol = (beta * math.exp(sgamma * tom))/((k + S)**zita)
+    return ImVol
+# Q11 answer, every quarter , MSF rebalance to delta = 1, the unit of option purchased should be 1/ (delta call(k1) - delta call (k2)
+# Formula to recalculate theta unit every quarter
+def Theta(pc,S, S_start_of_quarter, x, d, r,tom):
+    S = S_start_of_quarter
+    tom = 1/4
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    fenmu =(
+            BSdelta(pc, S, k1, vol1, d, r, tom) + 
+            BSvega(S, k1, vol1, d, r, tom) * DimvDS(tom, k1, S) - 
+            BSdelta(pc, S, k2, vol2, d, r, tom) - 
+            BSvega(S, k2, vol2, d, r, tom) * DimvDS(tom, k2, S))
+    theta = -(1 / fenmu)
+    return theta
+# Answer Q8, D delta for a single option
+def DdeltaU(S, k, vol, d, r, tom, M, w):
+    DdeltaU = -((
+              Realcharm(S, k, vol, d, r, tom) + Realgamma(S, k, vol, d, r, tom) * psi * S * M +
+              0.5 * Realspeed(S, k, vol, d, r, tom) * sigma**2 * S**( 2 * (1 - zita))) * dt +
+               Realgamma(S, k, vol, d, r, tom) * sigma * S**(1 - zita) * w)
+    return DdeltaU
+# Def in Q11, D dealta Ubar in price mechanism is the aggregate of all D delta's, which is theta * (D delta for K1 call - D delta for K2 call)
+def DdeltaUbar(pc, S, S_start_of_quarter, x, d, r, tom, M, theta_value, w):
+    #print("Theta value: ", theta_value)
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    DdeltaUbar = (
+             #### component pertaining to MSF strategy
+             (theta_value * DdeltaU(S, k1, ImVol(S, tom, k1), d, r, tom, M, w) -
+             theta_value * DdeltaU(S, k2, ImVol(S, tom, k2), d, r, tom, M, w))
+             #### component pertaining to FBI strategy:
+             + (-w0 * DdeltaU(S,k1,ImVol(S,tom,k1), d, r, tom, M, w) -
+                2 * w0 * DdeltaU(S, k2, ImVol(S, tom, k2), d, r, tom, M, w))) ## short a put = +ve delta, long calls = +ve
+            ####
+    return DdeltaUbar
+# Calculate M the feedback section in pricing mechanism, it's calcualted every hour so the integral becomes discrete, the below is the sum of all D dealta U Bar's by hour. i.e if t= 3, this calculates M3 = M1 + M2 + M3
+def calM(i, quarter_i, DdeltaUbarVals):
+    mSum = 0
+    quarter = int((i - quarter_i) / (90 * 24))
+    #print(i, quarter_i, quarter, quarter * 90 * 24)
+    for j in range(1, quarter_i):
+        m = math.exp(-phi * (quarter_i - j) * dt) * DdeltaUbarVals[quarter * 90 * 24 + j]
+        mSum = mSum + m
+    return mSum
+# Pricing function for the St 
+def caldS(S, M, w):
+    # print all parameters
+    dWt = w
+    dS = psi * S * M * dt + sigma * S**(1-zita) * dWt
+    #print("psi: {}, S: {}, dS: {}, M: {}, dt: {}, sigma: {}, zita: {}, dWt: {}".format(psi, S, dS, M, dt, sigma, zita, dWt))
+    return dS
+
+def BSprice(pc, S, k, vol, d, r, tom):
+    d1 = return_d1(S, k, vol, d, r, tom)
+    d2 = d1 - vol * math.sqrt(tom)
+    BSpricecalc = pc * math.exp(-d * tom) * S * norm.cdf(pc * d1) - pc * k * math.exp(-r * tom) * norm.cdf(pc * d2)
+    return(BSpricecalc)
+
+#######################################
+
+### Main Code
+
+datasets = []
+
+for i in range(simulation_runs):
+    # Fixing random seed for simulation
+    np.random.seed(i)
+    # Initializing values
+    # - S0: initial stock price
+    Svals = [S0]
+    dSvals = [0]
+    # - M: past overall delta change, intial 0 as ho trade at time = 0
+    Mvals = [0]
+    # Reset M at the start of every quarter
+    MQuarterVals = [0]
+    # Store each quarterly M values as a list of lists, each list represents a quarter
+    MQuarters = []
+    # - DDeltaUbar: overall delta change in the last hour
+    DDeltaUbarVals = [0]
+    daily_return = [0]
+    log_returns = [0]
+    # Generate brownian motion
+    W = gen_random_walk(n, 0)
+    ## Establish 2 portfolios
+    portfolio_1 = [0] ## stock and cash
+    portfolio_2 = [0] ## includes options
+    
+    x = 100 * (sigma / 2) # quarterlise the sigma given 0.2 which is annual to one quarter vol (then rescaled by S0)
+    S_start_of_quarter = Svals[0] # Set the first start of quarter price to the initial stock price
+    theta_start_of_quarter = Theta(1, S_start_of_quarter, S_start_of_quarter, x, 0, r, 1/4) # Calculate the theta value at the start of the quarter
+    
+    theta_vals = [theta_start_of_quarter]
+    s_start_of_quarter_vals = [S_start_of_quarter]
+    x_vals = [x]
+
+# For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        
+        DDeltaUbarVal = DdeltaUbar(1, Svals[i-1], S_start_of_quarter, x, 0, r, tom, MQuarterVals[quarter_i - 1], theta_start_of_quarter, W[i])
+        DDeltaUbarVals.append(DDeltaUbarVal)
+        
+        M = calM(i, quarter_i, DDeltaUbarVals)
+        dS = caldS(Svals[i-1], MQuarterVals[quarter_i - 1], W[i])
+        #S = 0 if Svals[i-1] + dS < 0 else Svals[i-1] + dS
+        S = Svals[i-1] + dS
+        Mvals.append(M)
+        MQuarterVals.append(M)
+        dSvals.append(dS)
+        Svals.append(S)
+        
+        theta_vals.append(theta_start_of_quarter)
+        s_start_of_quarter_vals.append(S_start_of_quarter)
+        x_vals.append(x)
+        
+        daily_return.append((Svals[i] - Svals[i-1])/Svals[i-1])  ## actually an hourly return?
+        log_return = np.log(Svals[i] / Svals[i-1])
+        log_returns.append(log_return)
+        
+        # At the end of every quarter, we need to 
+        # 1. reset the S_start_of_quarter
+        # 2. reset the x value namely to reset K1 and K2
+        if i % (90 * 24) == 0:
+            
+            S_start_of_quarter = Svals[i]
+            # let x be the normalised standard deviation of the daily return over the last 90 days
+            quarterly_returns = daily_return[i - 90 * 24:i]
+         
+            std = np.std(quarterly_returns)
+            x_pre = std * np.sqrt(24*90)
+            x = x_pre * S
+            
+            theta_start_of_quarter = Theta(1, S_start_of_quarter, S_start_of_quarter, x, 0, r, 1/4)
+            MQuarters.append(MQuarterVals)
+            MQuarterVals = [0]
+            
+    
+    # Store the results of the current iteration
+    temp_dict = {}
+    temp_dict["Svals"] = Svals
+    temp_dict["Mvals"] = Mvals
+    temp_dict["MQuarterVals"] = MQuarters
+    temp_dict["DDeltaUbarVals"] = DDeltaUbarVals
+    temp_dict["daily_return"] = daily_return
+    temp_dict["log_returns"] = log_returns
+    temp_dict["theta_vals"] = theta_vals
+    temp_dict["s_start_of_quarter_vals"] = s_start_of_quarter_vals
+    temp_dict["x_vals"] = x_vals
+    temp_dict["W"] = W
+    datasets.append(temp_dict)
+           
+## Graphs and other output
+
+# Function to examine a specific run
+def print_graphs(datasets, iteration):
+    
+    x = range(0, len(datasets[iteration]["Svals"]))
+    
+    values_to_plot = {
+        "Stock Price": 'Svals',
+        #"log_returns": 'log_returns',
+        "Value of M": 'Mvals',
+        "Value of Theta": 'theta_vals',
+        "Value of x": 'x_vals',
+        "S start of quarter": 's_start_of_quarter_vals',
+        #"Brownian Motion": 'W',
+        "DDeltaUbarVals" : 'DDeltaUbarVals'
+    }
+    
+    # Create a figure and a grid of subplots
+    fig, axs = plt.subplots(len(values_to_plot), figsize=(10, 10))
+    
+    for i, value_to_plot in enumerate(values_to_plot.keys()):
+        print(i, value_to_plot, values_to_plot[value_to_plot])
+        axs[i].plot(x, datasets[iteration][values_to_plot[value_to_plot]][0:len(Svals)])
+        axs[i].set_title(value_to_plot)
+        for j in range(1, int(len(datasets[iteration]["Svals"])/(90*24)) + 1):
+            axs[i].axvline(x=j * 2160, color='r', linestyle='--')
+    
+    # Display the figure
+    plt.tight_layout()
+    plt.subplots_adjust(hspace=0.5)
+    plt.show()
+    
+def plot_all_simulations(datasets, colorised=False, all_legend=False):
+    x = range(0, n)
+    
+    fig, axs = plt.subplots(1, 1, figsize=(10, 10))
+
+    simulated_paths = np.array([dataset['Svals'] for dataset in datasets])
+    Average_path = np.mean(simulated_paths, axis=0)
+
+    cmap = cm.get_cmap('inferno')
+
+    for i in range(len(datasets)):
+        if colorised:
+            color = cmap( i / len(datasets))
+        else:
+            color = 'gray'
+    
+        # Plot the data for the current run with the calculated color
+        if all_legend:
+            axs.plot(x, datasets[i]["Svals"][0:n], color=color, label="Run {}".format(i), linewidth=0.2)
+        else:
+            axs.plot(x, datasets[i]["Svals"][0:n], color=color, linewidth=0.2)
+    
+    axs.plot(x, Average_path, color='black', label="Run average", linewidth=1)
+
+    for j in range(1, int(len(datasets[0]["Svals"])/(90*24)) + 1):
+        axs.axvline(x=j * 2160, color='r', linestyle='--')
+      
+    plt.legend()
+    plt.show()
+    
+plot_all_simulations(datasets)
+
+
+dip_datasets = [datasets[2], datasets[5], datasets[7], datasets[11], datasets[13], datasets[14], datasets[16]]
+
+
+plot_all_simulations(dip_datasets, colorised=True, all_legend=True)
+
+print_graphs(dip_datasets,0)
+
+
+def Cal_Delta(pc, S, S_start_of_quarter, x, d, r,tom):
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    fenmu =(
+            BSdelta(pc, S, k1, vol1, d, r, tom) + 
+            BSvega(S, k1, vol1, d, r, tom) * DimvDS(tom, k1, S) - 
+            BSdelta(pc, S, k2, vol2, d, r, tom) - 
+            BSvega(S, k2, vol2, d, r, tom) * DimvDS(tom, k2, S)
+            )
+    Cal_Delta = Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4) * fenmu
+    return Cal_Delta
+
+
+Path_deltas = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_delta = [0]
+
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        Delta_value = Cal_Delta(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+
+        Path_delta.append(Delta_value)
+    
+    # Display the figure
+    Path_deltas.append(Path_delta)
+
+
+fig, axs = plt.subplots(len(dip_datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno')
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_deltas[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+
+fig, axs = plt.subplots(1, 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno') 
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs.plot(x, Path_deltas[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.legend()
+plt.show()
+
+
+def Cal_Gamma(pc, S, S_start_of_quarter, x, d, r,tom):
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    Gamma_one = -Realgamma (S, k1, vol1, d, r, tom) + Realgamma (S, k2, vol2, d, r, tom)
+    Cal_Gamma = Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4)* Gamma_one
+    return Cal_Gamma
+
+
+Path_gammas = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_gamma = [0]
+
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        Gamma_value = -Cal_Gamma(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+
+        Path_gamma.append(Gamma_value)
+    
+    # Display the figure
+    Path_gammas.append(Path_gamma)
+ 
+
+fig, axs = plt.subplots(len(dip_datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno') 
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_gammas[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+
+def Cal_Vega(pc, S, S_start_of_quarter, x, d, r,tom):
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    Vega_one = -BSvega(S, k1, vol1, d, r, tom)+BSvega(S, k2, vol2, d, r, tom)
+    Cal_Vega = Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4)* Vega_one
+    return Cal_Vega
+
+
+Path_vegas = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_vega = [0]
+
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        Vega_value = Cal_Vega(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+
+        Path_vega.append(Vega_value)
+    
+    # Display the figure
+    Path_vegas.append(Path_vega)
+
+fig, axs = plt.subplots(len(dip_datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno') 
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_vegas[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+
+######
+
+def Cal_MSF_PnL(pc, S, S_start_of_quarter, x, d, r, tom): 
+    k1 = returnK1(S_start_of_quarter, x)
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    starting_vol1 = ImVol(S_start_of_quarter, 1/4, k1)
+    starting_vol2 = ImVol(S_start_of_quarter, 1/4, k2)
+    BSVal_initial = -BSprice(pc, S_start_of_quarter, k1, starting_vol1, d, r, 1/4) + BSprice(pc, S_start_of_quarter, k2, starting_vol2, d, r, 1/4)
+    BSVal_current = BSprice(pc, S, k1, vol1, d, r, tom) - BSprice(pc, S, k2, vol2, d, r, tom)
+    starting_value = -Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4) * BSVal_initial
+    current_value = -Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4) * BSVal_current
+    MSF_PnL = current_value + starting_value
+    return MSF_PnL
+
+Path_MSF_PnLs = []
+End_Quarter_MSF_PnLs = []
+
+##Testing MSF PnL
+def test_PnL(series):
+    Sp = dip_datasets[series]['Svals']
+    Ssquarter = dip_datasets[series]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[series]['x_vals']
+
+    Path_MSF_PnL = [0]
+    End_Quarter_PnL = []
+    
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        if i % (90 * 24) == 2159:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            End_Quarter_PnL.append(MSF_PnL_value_orig)
+            MSF_PnL_value = sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value)
+        elif i % (90*24) == 0 and i != 0:  ## corrective measure to avoid duplication of pnl
+            MSF_PnL_value = sum(End_Quarter_PnL)
+        else:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            MSF_PnL_value = MSF_PnL_value_orig + sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value) 
+   
+    # Display the figure
+    Path_MSF_PnLs.append(Path_MSF_PnL)
+    End_Quarter_MSF_PnLs.append(End_Quarter_PnL)
+
+Path_MSF_PnLs = []
+End_Quarter_MSF_PnLs = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_MSF_PnL = [0]
+    End_Quarter_PnL = []
+    
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        if i % (90 * 24) == 2159:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            #quarter_end_adj = MSF_PnL_value + Path_MSF_PnL[-1]
+            End_Quarter_PnL.append(MSF_PnL_value_orig)
+            MSF_PnL_value = sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value)
+        elif i % (90*24) == 0 and i != 0:
+            MSF_PnL_value = sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value)
+        else:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            MSF_PnL_value = MSF_PnL_value_orig + sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value) 
+   
+    # Display the figure
+    Path_MSF_PnLs.append(Path_MSF_PnL)
+    End_Quarter_MSF_PnLs.append(End_Quarter_PnL)
+    
+    
+fig, axs = plt.subplots(len(dip_datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno')     
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_MSF_PnLs[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+## Creating Distribution of MSF PnL Outcomes
+
+Path_MSF_PnLs = []
+End_Quarter_MSF_PnLs = []
+
+for iteration in range(len(datasets)):
+    Sp = datasets[iteration]['Svals']
+    Ssquarter = datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = datasets[iteration]['x_vals']
+
+    Path_MSF_PnL = [0]
+    End_Quarter_PnL = []
+    
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        if i % (90 * 24) == 2159:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            End_Quarter_PnL.append(MSF_PnL_value_orig)
+            MSF_PnL_value = sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value)
+        elif i % (90*24) == 0 and i != 0:
+            MSF_PnL_value = sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value)
+        else:
+            MSF_PnL_value_orig = Cal_MSF_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            MSF_PnL_value = MSF_PnL_value_orig + sum(End_Quarter_PnL)
+            Path_MSF_PnL.append(MSF_PnL_value) 
+   
+    # Display the figure
+    Path_MSF_PnLs.append(Path_MSF_PnL)
+    End_Quarter_MSF_PnLs.append(End_Quarter_PnL)
+    
+    
+fig, axs = plt.subplots(len(datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno')     
+
+for iteration in range(len(datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_MSF_PnLs[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+MSF_End_PnLs = []
+
+for i in range(len(Path_MSF_PnLs)): 
+    MSF_End_PnLs.append(Path_MSF_PnLs[i][-1])
+    
+
+fig, ax = plt.subplots(1,1)
+ax.hist(MSF_End_PnLs, bins=30)
+ax.set_title("Distribution of Ending PnLs for MSF")
+ax.set_xlabel('Profits/Losses') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+## checking distributions around K1 and K2 across runs
+above_below_k2 = []
+for i in range(len(dip_datasets)):
+    for j in range(1,n):
+        above_below_k2.append(dip_datasets[i]['Svals'][j] - (dip_datasets[i]['s_start_of_quarter_vals'][j] + dip_datasets[i]['x_vals'][j]))
+        
+#plt.hist(above_below_k2, bins=1000)
+fig, ax = plt.subplots(1,1)
+ax.hist(above_below_k2, bins=1000)
+ax.set_title("Distribution of Stock Price by Hour vs K2 Strike")
+ax.set_xlabel('Distance from K2 Strike (K2=0)') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+above_below_k1 = []
+for i in range(len(dip_datasets)):
+    for j in range(1,n):
+        above_below_k1.append(dip_datasets[i]['Svals'][j] - (dip_datasets[i]['s_start_of_quarter_vals'][j] - dip_datasets[i]['x_vals'][j]))
+        
+#plt.hist(above_below_k1, bins=1000)
+fig, ax = plt.subplots(1,1)
+ax.hist(above_below_k1, bins=1000)
+ax.set_title("Distribution of Stock Price by Hour vs K1 Strike")
+ax.set_xlabel('Distance from K1 Strike (K1=0)') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+
+above_below_k2 = []
+for i in range(len(datasets)):
+    for j in range(1,n):
+        above_below_k2.append(datasets[i]['Svals'][j] - (datasets[i]['s_start_of_quarter_vals'][j] + datasets[i]['x_vals'][j]))
+        
+#plt.hist(above_below_k2, bins=1000)
+fig, ax = plt.subplots(1,1)
+ax.hist(above_below_k2, bins=1000)
+ax.set_title("Distribution of Stock Price by Hour vs K2 Strike")
+ax.set_xlabel('Distance from K2 Strike (K2=0)') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+above_below_k1 = []
+for i in range(len(datasets)):
+    for j in range(1,n):
+        above_below_k1.append(datasets[i]['Svals'][j] - (datasets[i]['s_start_of_quarter_vals'][j] - datasets[i]['x_vals'][j]))
+        
+#plt.hist(above_below_k1, bins=1000)
+fig, ax = plt.subplots(1,1)
+ax.hist(above_below_k1, bins=1000)
+ax.set_title("Distribution of Stock Price by Hour vs K1 Strike")
+ax.set_xlabel('Distance from K1 Strike (K1=0)') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+
+
+########### FBI ################################
+
+def Cal_FBI_PnL(pc, S, S_start_of_quarter, x, d, r, tom): 
+    k1 = returnK1(S_start_of_quarter, x)
+    #k1 = S_start_of_quarter
+    k2 = returnK2(S_start_of_quarter, x)
+    vol1 = ImVol(S, tom, k1)
+    vol2 = ImVol(S, tom, k2)
+    starting_vol1 = ImVol(S_start_of_quarter, 1/4, k1)
+    starting_vol2 = ImVol(S_start_of_quarter, 1/4, k2)
+    ## 1 is call, -1 is put
+    BSVal_initial = -BSprice(-1, S_start_of_quarter, k1, starting_vol1, d, r, 1/4) + 2 * BSprice(pc, S_start_of_quarter, k2, starting_vol2, d, r, 1/4)
+    BSVal_current = BSprice(-1, S, k1, vol1, d, r, tom) - 2 * BSprice(pc, S, k2, vol2, d, r, tom)
+    #starting_value = -Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4) * BSVal_initial
+    #current_value = -Theta(1,S_start_of_quarter,S_start_of_quarter,x,0,r,1/4) * BSVal_current
+    FBI_PnL = BSVal_initial + BSVal_current
+    return FBI_PnL
+
+Path_FBI_PnLs = []
+End_Quarter_FBI_PnLs = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_FBI_PnL = [0]
+    End_Quarter_PnL = []
+    
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        tom = 1/4 - quarter_i * dt
+        if i % (90 * 24) == 2159:
+            FBI_PnL_value_orig = Cal_FBI_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            #quarter_end_adj = MSF_PnL_value + Path_MSF_PnL[-1]
+            End_Quarter_PnL.append(FBI_PnL_value_orig)
+            FBI_PnL_value = sum(End_Quarter_PnL)
+            Path_FBI_PnL.append(FBI_PnL_value)
+        elif i % (90*24) == 0 and i != 0:
+            FBI_PnL_value = sum(End_Quarter_PnL)
+            Path_FBI_PnL.append(FBI_PnL_value)
+        else:
+            FBI_PnL_value_orig = Cal_FBI_PnL(1,Sp[i],Ssquarter[i],xvalue[i],0,0,tom)
+            FBI_PnL_value = FBI_PnL_value_orig + sum(End_Quarter_PnL)
+            Path_FBI_PnL.append(FBI_PnL_value) 
+   
+    # Display the figure
+    Path_FBI_PnLs.append(Path_FBI_PnL)
+    End_Quarter_FBI_PnLs.append(End_Quarter_PnL)
+    
+    
+fig, axs = plt.subplots(len(dip_datasets), 1, figsize=(10, 10))
+x = range(n)
+cmap = cm.get_cmap('inferno')     
+
+for iteration in range(len(dip_datasets)):
+    color = cmap(i / len(datasets))
+    axs[iteration].plot(x, Path_FBI_PnLs[iteration], label="Run {}".format(iteration), linewidth=0.5)
+
+plt.show()
+
+FBI_End_PnLs = []
+
+for i in range(len(Path_FBI_PnLs)): 
+    FBI_End_PnLs.append(Path_FBI_PnLs[i][-1])
+    
+fig, ax = plt.subplots(1,1)
+ax.hist(FBI_End_PnLs, bins=30)
+ax.set_title("Distribution of Ending PnLs for Portfolio 2 (options only)")
+ax.set_xlabel('Profits/Losses') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+
+Path_FBI_Linear_PnLs = []
+End_Quarter_FBI_Linear_PnLs = []
+
+for iteration in range(len(dip_datasets)):
+    Sp = dip_datasets[iteration]['Svals']
+    Ssquarter = dip_datasets[iteration]['s_start_of_quarter_vals']
+    xvalue = dip_datasets[iteration]['x_vals']
+
+    Path_FBI_Linear_PnL = [0]
+    End_Quarter_Linear_PnL = []
+    Quarterly_PnL = [0]
+    position = 1
+    
+    # For each quarter, calcualte M and S values within the quarter
+    for i in range(1, n):
+        #quarter_i = 90 * 24 if i % (90 * 24) == 0 else i % (90 * 24)
+        #tom = 1/4 - quarter_i * dt
+        k1 = Ssquarter[i] - xvalue[i]
+        k2 = Ssquarter[i] + xvalue[i]
+        
+        if i % 24 == 0: ## sets trading frequency to once daily
+            if Sp[i] <= k1:
+                position = -1
+            elif Sp[i] > k1:
+                position = 1
+        
+        if i % (90 * 24) == 2159:
+            hourly_PnL = position * (Sp[i] - Sp[i-1])
+            Quarterly_PnL.append(hourly_PnL)
+            running_PnL = sum(Quarterly_PnL) + sum(End_Quarter_Linear_PnL)
+            Path_FBI_Linear_PnL.append(running_PnL)
+            End_Quarter_Linear_PnL.append(sum(Quarterly_PnL))
+            
+        elif i % (90 * 24) == 0:
+            Quarterly_PnL = [0]
+            position = 1
+            hourly_PnL = position * (Sp[i] - Sp[i-1])
+            Quarterly_PnL.append(hourly_PnL)
+            running_PnL = sum(Quarterly_PnL) + sum(End_Quarter_Linear_PnL)
+            Path_FBI_Linear_PnL.append(running_PnL)
+            
+        else:
+            hourly_PnL = position * (Sp[i] - Sp[i-1])
+            Quarterly_PnL.append(hourly_PnL)
+            running_PnL = sum(Quarterly_PnL) + sum(End_Quarter_Linear_PnL)
+            Path_FBI_Linear_PnL.append(running_PnL)
+                
+    
+            
+    # Display the figure
+    Path_FBI_Linear_PnLs.append(Path_FBI_Linear_PnL)
+    End_Quarter_FBI_Linear_PnLs.append(End_Quarter_Linear_PnL)
+
+
+
+FBI_End_Linear_PnLs = []
+
+for i in range(len(Path_FBI_Linear_PnLs)): 
+    FBI_End_Linear_PnLs.append(Path_FBI_Linear_PnLs[i][-1])
+   
+fig, ax = plt.subplots(1,1)
+ax.hist(FBI_End_Linear_PnLs, bins=30)
+ax.set_title("Distribution of Ending PnLs for Portfolio 1")
+ax.set_xlabel('Profits/Losses') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+master_portfolio_2_pnl = []
+
+for i in range(len(FBI_End_PnLs)):
+    combined_pnl = FBI_End_PnLs[i] + FBI_End_Linear_PnLs[i]
+    master_portfolio_2_pnl.append(combined_pnl)
+    
+fig, ax = plt.subplots(1,1)
+ax.hist(master_portfolio_2_pnl, bins=30)
+ax.set_title("Distribution of Ending PnLs for Portfolio 2 (composite)")
+ax.set_xlabel('Profits/Losses') 
+ax.set_ylabel('Frequency')
+plt.show()
+    
+    
+    
+for i in range(len(Path_FBI_Linear_PnLs)):
+    fig, ax = plt.subplots(1,1)
+    ax.plot(Path_FBI_Linear_PnLs[i], bins=30)
+    ax.set_title("PnL Paths for Portfolio 1 (with Portfolio 2 effects)")
+    ax.set_xlabel('Hours') 
+    ax.set_ylabel('Profits/Losses')
+    plt.show()
+
+
+pnl_2 = pd.DataFrame(master_portfolio_2_pnl)
+
+print("First Quintile:%.2f"%pnl_2.quantile(.2));
+print("Second Quintile:%.2f"%pnl_2.quantile(.4));
+print("Third Quintile:%.2f"%pnl_2.quantile(.6));
+print("Fourth Quintile:%.2f"%pnl_2.quantile(.8));
+print("100th Percentile:%.2f"%pnl_2.quantile(1));
+
+np.mean(master_portfolio_2_pnl)
+np.median(master_portfolio_2_pnl)
+
+non_linear_2 = pd.DataFrame(Path_FBI_PnLs)
+linear_2 = pd.DataFrame(Path_FBI_Linear_PnLs)
+combined_path_2 = non_linear_2 + linear_2
+
+stdevs_2 = []
+for i in range(len(combined_path_2)):
+    stdevs_2.append(np.std(combined_path_2[i]))
+
+fig, ax = plt.subplots(1,1)
+ax.hist(stdevs_2, bins=30)
+ax.set_title("Annual Volatility of Portfolio 2 Returns")
+ax.set_xlabel('Standard Deviation of Returns') 
+ax.set_ylabel('Frequency')
+plt.show()
+
+transposed_path_2 = combined_path_2.transpose()
+
+fig, ax = plt.subplots(1,1)
+ax.plot(transposed_path_2)
+ax.set_title("Porfolio 2 Path Returns")
+ax.set_xlabel('Hours') 
+ax.set_ylabel('Returns')
+plt.show()
+
+np.mean(stdevs_2)
+np.mean(master_portfolio_2_pnl)
+
+
+Path_MSF_PnLs_dip = []
+End_Quarter_MSF_PnLs_dip = []
+
+dip_references = [2,5,7,11,13,14,16]
+dip_pnls_2 = transposed_path_2[dip_references]
+
+fig, ax = plt.subplots(1,1)
+ax.plot(dip_pnls_2)
+ax.set_title("Porfolio 2 Path Returns")
+ax.set_xlabel('Hours') 
+ax.set_ylabel('Returns')
+plt.show()
+
+## reformatting chart
+
+daily_test = dip_pnls_2.iloc[::24].copy()
+daily_test.reset_index(drop=True, inplace=True)
+
+fig, ax = plt.subplots(1,1)
+for col in daily_test.columns:
+    ax.plot(daily_test[col], label=col)
+
+ax.set_title("Portfolio 2 Path Returns")
+ax.set_xlabel('Days') 
+ax.set_ylabel('Cumulative Returns')
+ax.legend()
+plt.show()
+
+
+Linear_returns = pd.DataFrame(Path_FBI_Linear_PnLs)
+transposed_linear = Linear_returns.transpose()
+dip_pnls_1 = transposed_linear[dip_references]
+daily_linear = dip_pnls_1.iloc[::24]
+daily_linear.reset_index(drop=True, inplace=True)
+
+
+fig, ax = plt.subplots(1,1)
+for col in daily_test.columns:
+    ax.plot(daily_test[col], label=col)
+
+ax.set_title("Portfolio 2 Path Returns")
+ax.set_xlabel('Days') 
+ax.set_ylabel('Cumulative Returns')
+ax.legend()
+plt.show()
+
+
+#####################
+
+def price_calls(k, t):
+    Avg_values = []
+    for i in range(len(datasets)):
+        Q_step = 90*24
+        if (t == 1):
+            t_val = Q_step * 4 * t - 1 
+        else:
+            t_val = Q_step * 4 * t 
+        S_end = datasets[i]["Svals"][int(t_val)]
+        Avg_values.append(max(S_end - k, 0))
+    price = np.mean(Avg_values)
+    return price        
+
+def BSvol(pc, S, k, price, d, r, t, start = 0.2):
+  
+  voli = start
+  pricei = BSprice(pc, S, k, voli, d, r, t)
+  vegai = BSvega(S, k, voli, d, r, t)
+  while(abs(price - pricei) > 0.000001):
+    voli=voli + (price - pricei) / vegai
+    pricei=BSprice(pc, S, k, voli, d, r, t)
+    vegai=BSvega(S, k, voli, d, r, t)
+  
+  BSvol = voli
+  return(BSvol)
+
+strikes = []
+maturities = []
+implied_vols = []
+
+        
+for i in range(90,111,1):
+    for j in [1/4, 2/4, 3/4, 1]:
+        price = price_calls(i, j)
+        try:
+            implieds = BSvol(1, 100, i, price, 0, 0, j)
+        except:
+            implieds = 0
+        strikes.append(i)
+        maturities.append(j)
+        implied_vols.append(implieds)
+        
+IV_table = pd.DataFrame({'Strike':strikes,'Tenor':maturities,'Implied Vol':implied_vols})
+
+for i in [1/4, 2/4, 3/4, 1]:
+    x = list(IV_table.loc[IV_table['Tenor']==i]['Strike'])
+    y = list(IV_table.loc[IV_table['Tenor']==i]['Implied Vol'])
+    fig, ax = plt.subplots(1,1)
+    ax.plot(x,y)
+    ax.set_title("Implied Volatility for %s Year Tenor" % (i))
+    ax.set_xlabel('Strike Price') 
+    ax.set_ylabel('Implied Volatility')
+    ax.set_yticks(np.arange(0.08, 0.19, 0.01))
+    plt.show()
+
+def modelIM(t,k,beta=beta,gamma=sgamma,S_start=100,zeta=zita):
+    model_IMvol = beta*np.exp(gamma*t)/((k+S_start)**zita)
+    return model_IMvol
+
+
+model_IMvol = []
+model_strike = []
+model_tenor = []
+
+for i in range(90,111,1):
+    for j in [1/4, 2/4, 3/4, 1]:
+        model_IMvol.append(modelIM(j,i))
+        model_strike.append(i)
+        model_tenor.append(j)
+        
+IV_model_table = pd.DataFrame({'Strike':model_strike,'Tenor':model_tenor,'Implied Vol':model_IMvol})
+
+for i in [1/4, 2/4, 3/4, 1]:
+    x = list(IV_model_table.loc[IV_model_table['Tenor']==i]['Strike'])
+    y = list(IV_model_table.loc[IV_model_table['Tenor']==i]['Implied Vol'])
+    fig, ax = plt.subplots(1,1)
+    ax.plot(x,y)
+    ax.set_title("Implied Model Volatility for %s Year Tenor" % (i))
+    ax.set_xlabel('Strike Price') 
+    ax.set_ylabel('Implied Model Volatility')
+    #ax.plot.yticks(np.arrange(0.08,0.12,0.01))
+    #ax.yaxis.set_major_locator(ticker.MultipleLocator(0.02))
+    ax.set_yticks(np.arange(0.08, 0.19, 0.01))
+    plt.show()
